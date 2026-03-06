@@ -1,75 +1,74 @@
-# CareerAI - Career Recommendation System
+# CareerAI - Skill-Based Career Recommendation System
 
-A skill-based career matching platform that helps users find suitable roles based on resume or manual input.
+CareerAI is a Flask web application that analyzes a user profile (manual input or resume upload), computes role matches, and explains missing skills with a learning roadmap.
 
-## Features
+## Current Capabilities
 
-- Resume upload and parsing (PDF, DOCX)
-- Manual profile input mode
-- Skill-based career matching against 7 role types
-- Explainable recommendations with skill gaps
-- Learning roadmap generation
-- Feedback tracking
-- Secure authentication with bcrypt password hashing
-- Security headers and CSRF protection
-
-## Quick Start
-
-```bash
-# Create virtual environment
-python -m venv venv
-source venv/bin/activate
-
-# Install dependencies
-pip install -r requirements.txt
-
-# Set up environment variables (optional for development)
-cp .env.example .env
-# Edit .env file with your settings
-
-# For enhanced NLP features (optional)
-python -m spacy download en_core_web_sm
-python -m nltk.downloader punkt stopwords
-
-# Run the application
-python backend/app.py
-```
-
-Visit http://127.0.0.1:5000
-
-Test: admin@example.com / admin123
+- Account registration and login with bcrypt password hashing
+- Email verification flow with link and OTP support
+- Resume upload (`pdf`, `doc`, `docx`, `txt`) and profile extraction
+- Manual profile entry (skills, interests, education, experience)
+- Profile persistence in database and auto-load on dashboard
+- Skill-based career matching with explainable output
+- Live market jobs and market skill demand (Adzuna-backed service)
+- Skill-gap summary and learning roadmap generation
+- Feedback history and deletion
+- Light and dark theme support across auth and dashboard pages
 
 ## Tech Stack
 
-- Flask 3.0.0
-- bcrypt (secure password hashing)
-- SQLite (feedback storage)
-- Bootstrap 5.3
-- Vanilla JavaScript
-- Optional: scikit-learn, spaCy, NLTK for enhanced features
+- Python 3.12+
+- Flask 3
+- Flask-SQLAlchemy
+- Flask-WTF (CSRF protection)
+- SQLite (default)
+- Bootstrap 5 + Vanilla JavaScript
 
-## Security Features
+## Project Layout
 
-- Bcrypt password hashing with automatic salting
-- Security headers (CSP, X-Frame-Options, etc.)
-- CSRF protection for forms and JSON requests
-- Input validation for file uploads
-- Environment-based configuration
+- `backend/app.py` - Flask routes and application entry point
+- `backend/config.py` - Environment-driven configuration
+- `backend/models/` - SQLAlchemy models
+- `backend/services/` - Matching, auth, and related services
+- `frontend/templates/` - Jinja templates
+- `frontend/static/` - CSS and JavaScript assets
 
-## Configuration
+## Local Setup
 
-See `.env.example` for available configuration options. Key settings:
+1. Create and activate a virtual environment.
+2. Install dependencies.
+3. Create environment file from the backend template.
+4. Start the app.
 
-- `DEBUG`: Set to `False` in production
-- `SECRET_KEY`: Use a strong, random secret key in production
-- `FLASK_ENV`: Set to `production` for deployment
-## Deployment
+```bash
+python -m venv .venv
+source .venv/bin/activate
+pip install -r requirements.txt
+cp backend/.env.template backend/.env
+python backend/app.py
+```
 
-Docker: `docker-compose up`  
-Or: Render.com, Railway.app, DigitalOcean, AWS
+App URL:
 
-## Development Notes
+`http://127.0.0.1:5000`
 
-- The app uses in-memory user storage by default. For production, implement a proper database.
-- ML/NLP features are optional and will gracefully degrade if dependencies are not installed.
-- Always set `DEBUG=False` and use strong `SECRET_KEY` in production.
+## Configuration Notes
+
+- Environment variables are loaded from `backend/.env`.
+- Default database is SQLite (`backend/instance/career_system.db`).
+- SMTP settings in `backend/.env` enable email delivery for verification.
+- Keep `DEBUG=False` in production.
+
+## Docker
+
+If you prefer containerized run:
+
+```bash
+docker-compose up --build
+```
+
+## Important Runtime Behavior
+
+- Dashboard recommendations use a quality threshold and hide weak matches.
+- If no recommendation meets threshold, dashboard shows a clear "no strong matches" state.
+- Profile snapshots are saved from both manual input and resume upload, then auto-restored after login.
