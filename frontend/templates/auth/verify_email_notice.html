@@ -7,11 +7,14 @@
 
 {% block auth_content %}
 <div class="verify-wrap">
+    {% set mail_status = request.args.get('mail_status', 'not_configured') %}
     {% if request.args.get('success') == '1' %}
     <div class="alert {{ 'alert-success' if request.args.get('mail_sent') == '1' else 'alert-warning' }} alert-dismissible fade show verify-alert" role="alert">
         <i class="fas {{ 'fa-check-circle' if request.args.get('mail_sent') == '1' else 'fa-triangle-exclamation' }} me-2"></i>
         {% if request.args.get('mail_sent') == '1' %}
         Account created successfully! Please check your email to verify your account.
+        {% elif mail_status == 'delivery_failed' %}
+        Account created, but verification email could not be delivered right now.
         {% else %}
         Account created, but email service is not configured in this environment.
         {% endif %}
@@ -27,6 +30,12 @@
     <p class="verify-description">
         We've sent a verification link to your email address.<br>
         Please click the link in the email to verify your account.
+    </p>
+    {% elif mail_status == 'delivery_failed' %}
+    <h6 class="verify-heading">Email Delivery Issue</h6>
+    <p class="verify-description">
+        Outgoing email is configured, but we could not deliver your verification email right now.<br>
+        Use OTP below or try resend verification.
     </p>
     {% else %}
     <h6 class="verify-heading">Email Service Not Configured</h6>

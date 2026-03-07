@@ -60,8 +60,9 @@ def resend_verification():
     verification_token = secrets.token_urlsafe(32)
     user.email_verification_token = verification_token
     db.session.commit()
-    mail_username = app.config.get('MAIL_USERNAME')
-    mail_configured = mail_username and mail_username != 'your-email@gmail.com'
+    mail_username = (app.config.get('MAIL_USERNAME') or '').strip()
+    mail_password = (app.config.get('MAIL_PASSWORD') or '').strip()
+    mail_configured = bool(mail_username and mail_password and mail_username != 'your-email@gmail.com')
     first_name = (user.name or '').split(' ')[0] if user.name else ''
     verification_url = url_for('verify_email', token=verification_token, _external=True)
     mail_sent = False
@@ -69,11 +70,14 @@ def resend_verification():
     otp_code = _generate_email_otp()
     _save_email_otp(email, otp_code)
 
+    mail_status = 'not_configured'
     if mail_configured:
         mail_sent = send_verification_email(email, verification_token, first_name, otp_code)
         if mail_sent:
+            mail_status = 'sent'
             flash('Verification email resent. Please check your inbox.', 'success')
         else:
+            mail_status = 'delivery_failed'
             flash('Could not send verification email. Please check email settings.', 'warning')
     else:
         logger.warning(f"EMAIL NOT CONFIGURED - Verification URL: {verification_url}")
@@ -83,6 +87,7 @@ def resend_verification():
         'email': email,
         'success': 1,
         'mail_sent': 1 if mail_sent else 0,
+        'mail_status': mail_status,
     }
     if not mail_sent and app.config.get('DEBUG'):
         notice_args['verification_url'] = verification_url
@@ -776,14 +781,17 @@ def register():
             else:
                 return render_template('auth/register.html', errors=[err])
 
-        mail_username = app.config.get('MAIL_USERNAME')
-        mail_configured = mail_username and mail_username != 'your-email@gmail.com'
+        mail_username = (app.config.get('MAIL_USERNAME') or '').strip()
+        mail_password = (app.config.get('MAIL_PASSWORD') or '').strip()
+        mail_configured = bool(mail_username and mail_password and mail_username != 'your-email@gmail.com')
         verification_url = url_for('verify_email', token=verification_token, _external=True)
         otp_code = _generate_email_otp()
         _save_email_otp(email, otp_code)
         mail_sent = False
+        mail_status = 'not_configured'
         if mail_configured:
             mail_sent = send_verification_email(email, verification_token, first_name, otp_code)
+            mail_status = 'sent' if mail_sent else 'delivery_failed'
             if not mail_sent:
                 logger.warning(f"EMAIL DELIVERY FAILED - Verification URL: {verification_url}")
         else:
@@ -793,6 +801,7 @@ def register():
             'success': 1,
             'email': email,
             'mail_sent': 1 if mail_sent else 0,
+            'mail_status': mail_status,
         }
         if not mail_sent and app.config.get('DEBUG'):
             notice_args['verification_url'] = verification_url
@@ -803,7 +812,7 @@ def register():
             message = (
                 'Account created! Verification email sent. Please check your inbox.'
                 if mail_sent
-                else 'Account created, but email could not be sent in this environment. Use the verification link shown on the next page.'
+                else 'Account created, but verification email could not be delivered right now. Use OTP or resend email from the next page.'
             )
             return jsonify({
                 'success': True,
