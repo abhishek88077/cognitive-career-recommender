@@ -2,7 +2,7 @@
 <nav class="navbar navbar-expand-lg navbar-dark bg-dark sticky-top">
     <div class="container">
         <!-- Brand -->
-        <a class="navbar-brand fw-bold" href="{{ url_for('main.index') }}">
+        <a class="navbar-brand fw-bold" href="{{ url_for('index') }}">
             <i class="fas fa-brain text-primary me-2"></i>
             CareerAI
         </a>
@@ -16,18 +16,18 @@
         <div class="collapse navbar-collapse" id="navbarNav">
             <ul class="navbar-nav me-auto">
                 <li class="nav-item">
-                    <a class="nav-link" href="{{ url_for('main.index') }}">
+                    <a class="nav-link" href="{{ url_for('index') }}">
                         <i class="fas fa-home me-1"></i>Home
                     </a>
                 </li>
-                {% if current_user.is_authenticated %}
+                {% if session.get('user_id') %}
                     <li class="nav-item">
-                        <a class="nav-link" href="{{ url_for('main.dashboard') }}">
+                        <a class="nav-link" href="{{ url_for('dashboard') }}">
                             <i class="fas fa-tachometer-alt me-1"></i>Dashboard
                         </a>
                     </li>
                     <li class="nav-item">
-                        <a class="nav-link" href="{{ url_for('main.upload_resume') }}">
+                        <a class="nav-link" href="{{ url_for('upload_resume') }}">
                             <i class="fas fa-file-upload me-1"></i>Upload Resume
                         </a>
                     </li>
@@ -36,9 +36,9 @@
                             <i class="fas fa-chart-line me-1"></i>AI Insights
                         </a>
                         <ul class="dropdown-menu">
-                            <li><a class="dropdown-item" href="{{ url_for('main.recommendations') }}">Career Recommendations</a></li>
-                            <li><a class="dropdown-item" href="{{ url_for('main.skill_analysis') }}">Skill Analysis</a></li>
-                            <li><a class="dropdown-item" href="{{ url_for('main.market_trends') }}">Market Trends</a></li>
+                            <li><a class="dropdown-item" href="{{ url_for('dashboard') }}#career-matches">Career Recommendations</a></li>
+                            <li><a class="dropdown-item" href="{{ url_for('dashboard') }}#skill-gap">Skill Analysis</a></li>
+                            <li><a class="dropdown-item" href="{{ url_for('dashboard') }}#live-market">Market Trends</a></li>
                         </ul>
                     </li>
                 {% endif %}
@@ -53,29 +53,19 @@
                     </button>
                 </li>
                 
-                {% if current_user.is_authenticated %}
+                {% if session.get('user_id') %}
                     <!-- User Menu -->
                     <li class="nav-item dropdown">
                         <a class="nav-link dropdown-toggle d-flex align-items-center" href="#" data-bs-toggle="dropdown">
-                            <img src="{{ current_user.avatar_url or url_for('static', filename='images/default-avatar.png') }}" 
-                                 alt="Avatar" class="rounded-circle me-2" width="24" height="24">
-                            {{ current_user.first_name or current_user.username }}
+                            <i class="fas fa-user-circle me-2"></i>
+                            {{ session.get('user_name', 'User') }}
                         </a>
                         <ul class="dropdown-menu dropdown-menu-end">
-                            <li><a class="dropdown-item" href="{{ url_for('auth.profile') }}">
+                            <li><a class="dropdown-item" href="{{ url_for('profile') }}">
                                 <i class="fas fa-user me-2"></i>Profile
                             </a></li>
-                            <li><a class="dropdown-item" href="{{ url_for('auth.settings') }}">
-                                <i class="fas fa-cog me-2"></i>Settings
-                            </a></li>
-                            {% if current_user.is_admin %}
-                                <li><hr class="dropdown-divider"></li>
-                                <li><a class="dropdown-item" href="{{ url_for('admin.dashboard') }}">
-                                    <i class="fas fa-crown me-2 text-warning"></i>Admin Panel
-                                </a></li>
-                            {% endif %}
                             <li><hr class="dropdown-divider"></li>
-                            <li><a class="dropdown-item" href="{{ url_for('auth.logout') }}">
+                            <li><a class="dropdown-item" href="{{ url_for('logout') }}">
                                 <i class="fas fa-sign-out-alt me-2"></i>Logout
                             </a></li>
                         </ul>
@@ -83,12 +73,12 @@
                 {% else %}
                     <!-- Guest Menu -->
                     <li class="nav-item">
-                        <a class="nav-link" href="{{ url_for('auth.login') }}">
+                        <a class="nav-link" href="{{ url_for('login') }}">
                             <i class="fas fa-sign-in-alt me-1"></i>Login
                         </a>
                     </li>
                     <li class="nav-item">
-                        <a class="btn btn-primary btn-sm ms-2" href="{{ url_for('auth.register') }}">
+                        <a class="btn btn-primary btn-sm ms-2" href="{{ url_for('register') }}">
                             <i class="fas fa-user-plus me-1"></i>Sign Up
                         </a>
                     </li>

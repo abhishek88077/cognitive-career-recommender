@@ -434,6 +434,20 @@ AuthModule.submitForm = async function(url, formData) {
         
         // Check if response is successful
         if (!response.ok) {
+            if (Array.isArray(data.errors) && data.errors.length) {
+                throw new Error(data.errors.join(' '));
+            }
+
+            if (data.errors && typeof data.errors === 'object') {
+                const flattened = Object.values(data.errors)
+                    .flatMap(value => Array.isArray(value) ? value : [value])
+                    .filter(Boolean)
+                    .map(String);
+                if (flattened.length) {
+                    throw new Error(flattened.join(' '));
+                }
+            }
+
             throw new Error(data.message || data.error || 'Request failed');
         }
         
