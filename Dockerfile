@@ -1,12 +1,17 @@
-FROM python:3.12-slim
-
+FROM python:3.11-slim
 # Set working directory
 WORKDIR /app
 
 # Install system dependencies
 RUN apt-get update && apt-get install -y \
     gcc \
+    g++ \
+    make \
+    libatlas-base-dev \
     && rm -rf /var/lib/apt/lists/*
+
+# Upgrade pip, wheel, setuptools to latest
+RUN pip install --upgrade pip wheel setuptools
 
 # Copy requirements first for better caching
 COPY requirements.txt .

@@ -32,9 +32,12 @@ const AuthModule = {
         this.setupEventListeners();
         this.initializePasswordToggles();
         this.initializeFormValidation();
-        
-        console.log('Authentication module initialized');
+        this.initializeTermsGate();
     }
+};
+
+AuthModule.getCsrfToken = function() {
+    return document.querySelector('meta[name="csrf-token"]')?.content || '';
 };
 
 /**
@@ -47,25 +50,31 @@ AuthModule.setupEventListeners = function() {
     const loginForm = document.getElementById('loginForm');
     if (loginForm) {
         loginForm.addEventListener('submit', (e) => this.handleLogin(e));
+
+        // Clear login errors as soon as user starts correcting input.
+        loginForm.querySelectorAll('input').forEach(input => {
+            input.addEventListener('input', () => this.clearInlineAlerts());
+        });
     }
     
     // Registration form
     const registerForm = document.getElementById('registerForm');
     if (registerForm) {
         registerForm.addEventListener('submit', (e) => this.handleRegistration(e));
-        
+
         // Real-time validation
         const emailField = registerForm.querySelector('#email');
         if (emailField) {
             emailField.addEventListener('blur', (e) => this.validateEmail(e.target));
             emailField.addEventListener('blur', (e) => this.checkEmailAvailability(e.target.value));
         }
-        
+
         const passwordField = registerForm.querySelector('#password');
         if (passwordField) {
             passwordField.addEventListener('input', (e) => this.checkPasswordStrength(e.target.value));
+            // Always show requirements, so no need to hide/show
         }
-        
+
         const confirmPasswordField = registerForm.querySelector('#confirm_password');
         if (confirmPasswordField) {
             confirmPasswordField.addEventListener('input', () => this.validatePasswordMatch());
@@ -279,13 +288,26 @@ AuthModule.updatePasswordRequirements = function(password) {
         if (element) {
             element.classList.toggle('text-success', req.met);
             element.classList.toggle('text-muted', !req.met);
-            
             const icon = element.querySelector('i');
             if (icon) {
-                icon.className = req.met ? 'fas fa-check' : 'fas fa-times';
+                icon.className = req.met ? 'fas fa-check me-1' : 'fas fa-circle me-1';
             }
         }
     });
+};
+
+AuthModule.initializeTermsGate = function() {
+    const termsCheckbox = document.getElementById('terms_accepted');
+    const registerBtn = document.getElementById('registerBtn');
+
+    if (!termsCheckbox || !registerBtn) return;
+
+    const syncButtonState = () => {
+        registerBtn.disabled = !termsCheckbox.checked || this.state.isSubmitting;
+    };
+
+    termsCheckbox.addEventListener('change', syncButtonState);
+    syncButtonState();
 };
 
 AuthModule.validatePasswordMatch = function() {
@@ -334,11 +356,14 @@ AuthModule.checkEmailAvailability = function(email) {
     const checkEmailUrl = document.querySelector('[data-check-email-url]')?.dataset.checkEmailUrl;
     if (!checkEmailUrl) return;
     
+    const csrfToken = this.getCsrfToken();
+
     fetch(checkEmailUrl, {
         method: 'POST',
         headers: {
             'Content-Type': 'application/json',
-            'X-Requested-With': 'XMLHttpRequest'
+            'X-Requested-With': 'XMLHttpRequest',
+            ...(csrfToken ? { 'X-CSRFToken': csrfToken } : {})
         },
         body: JSON.stringify({ email: email })
     })
@@ -368,20 +393,48 @@ AuthModule.checkEmailAvailability = function(email) {
  */
 AuthModule.submitForm = async function(url, formData) {
     try {
+        const csrfToken = this.getCsrfToken();
         const response = await fetch(url, {
             method: 'POST',
             body: formData,
             credentials: 'same-origin',
             headers: {
-                'X-Requested-With': 'XMLHttpRequest'
+                'X-Requested-With': 'XMLHttpRequest',
+                'Accept': 'application/json',
+                ...(csrfToken ? { 'X-CSRFToken': csrfToken } : {})
             }
         });
-        
-        const data = await response.json();
+
+        const rawBody = await response.text();
+        let data = null;
+
+        // Prefer JSON responses, but gracefully handle HTML error pages and redirects.
+        try {
+            data = rawBody ? JSON.parse(rawBody) : {};
+        } catch (parseError) {
+            if (response.redirected && response.url) {
+                return {
+                    success: true,
+                    redirect_url: response.url,
+                    message: 'Request completed successfully.'
+                };
+            }
+
+            const plainText = rawBody
+                .replace(/<[^>]*>/g, ' ')
+                .replace(/\s+/g, ' ')
+                .trim();
+
+            if (!response.ok && plainText) {
+                throw new Error(plainText.slice(0, 220));
+            }
+
+            throw new Error('Server returned an unexpected response format.');
+        }
         
         // Check if response is successful
         if (!response.ok) {
-            throw new Error(data.message || 'Request failed');
+            throw new Error(data.message || data.error || 'Request failed');
         }
         
         return data;
@@ -403,7 +456,7 @@ AuthModule.handleLogin = function(e) {
     if (!this.validateForm(form)) return;
     
     // Set loading state
-    this.setSubmissionState(true, 'Signing in...');
+    this.setSubmissionState(true, 'Signing In...');
     
     // Submit login - use form action or default to /login
     const submitUrl = form.action || '/login';
@@ -569,8 +622,13 @@ AuthModule.setSubmissionState = function(isSubmitting, loadingText = 'Loading...
     } else {
         if (btnText) btnText.classList.remove('d-none');
         if (btnLoading) btnLoading.classList.add('d-none');
-        submitButton.disabled = false;
+        const termsCheckbox = document.getElementById('terms_accepted');
+        submitButton.disabled = termsCheckbox ? !termsCheckbox.checked : false;
     }
+};
+
+AuthModule.clearInlineAlerts = function() {
+    document.querySelectorAll('.alert').forEach(alert => alert.remove());
 };
 
 /**
@@ -615,20 +673,38 @@ AuthModule.showAlert = function(type, message) {
         window.CognitiveCareerAI.showAlert(type, message);
         return;
     }
-    
+
+    const alertContainer = document.querySelector('.alert-container') || 
+                          document.querySelector('.auth-card-body') ||
+                          document.body;
+
+    // Remove existing alerts to prevent duplicates
+    const existingAlerts = alertContainer.querySelectorAll('.alert');
+    existingAlerts.forEach(alert => alert.remove());
+
+    const alertId = 'alert-' + Date.now();
+    // Use a softer red for error alerts
+    const customStyle = type === 'error' ? 'background-color: #ffeaea; color: #a94442; border-color: #f5c6cb;' : '';
     const alertHTML = `
-        <div class="alert alert-${type === 'error' ? 'danger' : type} alert-dismissible fade show" role="alert">
+        <div id="${alertId}" class="alert alert-${type === 'error' ? 'danger' : type} alert-dismissible fade show" role="alert" style="transition: opacity 0.5s; ${customStyle}">
             <i class="fas fa-${type === 'error' ? 'exclamation-circle' : 'check-circle'} me-2"></i>
             ${message}
             <button type="button" class="btn-close" data-bs-dismiss="alert"></button>
         </div>
     `;
-    
-    const alertContainer = document.querySelector('.alert-container') || 
-                          document.querySelector('.auth-card-body') ||
-                          document.body;
-    
+
     alertContainer.insertAdjacentHTML('afterbegin', alertHTML);
+
+    // Fade out quickly for auth errors to reduce noise.
+    const removeDelay = type === 'error' ? 3000 : 5000;
+    setTimeout(() => {
+        const alertElem = document.getElementById(alertId);
+        if (alertElem) {
+            alertElem.classList.remove('show');
+            alertElem.classList.add('fade');
+            setTimeout(() => { if (alertElem) alertElem.remove(); }, 500);
+        }
+    }, removeDelay);
 };
 
 AuthModule.showPasswordResetSuccess = function(email) {

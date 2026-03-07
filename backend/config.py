@@ -1,52 +1,54 @@
-"""
-Configuration settings for Cognitive Career & Job Recommendation System
-"""
+"""Application configuration for the CareerAI backend."""
 
 import os
+from pathlib import Path
+
 from dotenv import load_dotenv
 
-load_dotenv()
+
+BASE_DIR = Path(__file__).resolve().parent
+load_dotenv(BASE_DIR / ".env")
+
+
+def _to_int(value, default):
+    """Parse integer env values safely, even when comments are present."""
+    if value is None:
+        return default
+    cleaned = str(value).split("#", 1)[0].strip()
+    try:
+        return int(cleaned)
+    except (TypeError, ValueError):
+        return default
+
 
 class Config:
-    """Application configuration"""
-    
-    # Flask settings
-    SECRET_KEY = os.environ.get('SECRET_KEY') or 'cognitive-ai-career-system-2024'
-    DEBUG = True
-    
-    # File upload settings
-    MAX_CONTENT_LENGTH = 16 * 1024 * 1024  # 16MB max file size
-    UPLOAD_FOLDER = os.path.join(os.path.dirname(__file__), 'data', 'uploads')
-    ALLOWED_EXTENSIONS = {'pdf', 'doc', 'docx', 'txt'}
-    
-    # Database settings (if needed for future expansion)
-    DATABASE_URL = os.environ.get('DATABASE_URL') or 'sqlite:///career_system.db'
-    
-    # AI/ML Model settings
-    MODEL_PATH = os.path.join(os.path.dirname(__file__), 'models')
-    DATA_PATH = os.path.join(os.path.dirname(__file__), 'data')
-    
-    # Cognitive AI parameters
-    REASONING_THRESHOLD = 0.75
-    EXPLANATION_DEPTH = 3
-    LEARNING_RATE = 0.01
-    
-    # NLP settings
-    SPACY_MODEL = 'en_core_web_sm'
-    MAX_RESUME_LENGTH = 10000  # characters
-    
-    # Job recommendation settings
-    MAX_RECOMMENDATIONS = 10
-    SIMILARITY_THRESHOLD = 0.6
-    
-    # Explainable AI settings
-    SHAP_SAMPLE_SIZE = 1000
-    LIME_NUM_FEATURES = 20
-    
+    SECRET_KEY = os.getenv("SECRET_KEY", "dev-secret-key-change-me")
+    DEBUG = os.getenv("DEBUG", "False").lower() in ("1", "true", "t", "yes")
+
+    SQLALCHEMY_DATABASE_URI = os.getenv(
+        "DATABASE_URL", f"sqlite:///{BASE_DIR / 'instance' / 'career_system.db'}"
+    )
+    SQLALCHEMY_TRACK_MODIFICATIONS = False
+
+    MAX_CONTENT_LENGTH = _to_int(os.getenv("MAX_CONTENT_LENGTH"), 16 * 1024 * 1024)
+    UPLOAD_FOLDER = os.getenv("UPLOAD_FOLDER", str(BASE_DIR / "instance" / "uploads"))
+    ALLOWED_EXTENSIONS = {"pdf", "doc", "docx", "txt"}
+
+    MAIL_SERVER = os.getenv("MAIL_SERVER", "smtp.gmail.com")
+    MAIL_PORT = _to_int(os.getenv("MAIL_PORT"), 587)
+    MAIL_USERNAME = os.getenv("MAIL_USERNAME", "")
+    MAIL_PASSWORD = os.getenv("MAIL_PASSWORD", "")
+    MAIL_DEFAULT_SENDER = os.getenv("MAIL_DEFAULT_SENDER", MAIL_USERNAME or "noreply@careerai.local")
+
+    PERMANENT_SESSION_LIFETIME = _to_int(os.getenv("SESSION_LIFETIME_SECONDS"), 86400)
+
     @staticmethod
     def init_app(app):
-        """Initialize app with configuration"""
-        # Create necessary directories
-        os.makedirs(Config.UPLOAD_FOLDER, exist_ok=True)
-        os.makedirs(Config.MODEL_PATH, exist_ok=True)
-        os.makedirs(Config.DATA_PATH, exist_ok=True)
+        """Create required runtime directories for local/dev deployments."""
+        os.makedirs(app.config["UPLOAD_FOLDER"], exist_ok=True)
+        db_path = app.config.get("SQLALCHEMY_DATABASE_URI", "")
+        if db_path.startswith("sqlite:///"):
+            sqlite_file = db_path.replace("sqlite:///", "", 1)
+            parent_dir = os.path.dirname(sqlite_file)
+            if parent_dir:
+                os.makedirs(parent_dir, exist_ok=True)
