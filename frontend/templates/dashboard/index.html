@@ -195,11 +195,11 @@
                             </div>
                             <div class="col-12">
                                 <label class="form-label">Skills (comma separated)</label>
-                                <input type="text" class="form-control" id="skillsInput" placeholder="Python, SQL, Data Analysis">
+                                <input type="text" class="form-control" id="skillsInput" placeholder="e.g., Python, SQL, Data Analysis">
                             </div>
                             <div class="col-12">
                                 <label class="form-label">Career interests</label>
-                                <input type="text" class="form-control" id="interestArea" placeholder="Data science, Backend development">
+                                <input type="text" class="form-control" id="interestArea" placeholder="e.g., AI, Data science, Backend development">
                             </div>
                         </div>
                         <button class="btn btn-secondary mt-3" type="submit">
@@ -299,15 +299,15 @@
             <section class="insight-grid" id="live-market">
                 <div class="section-header">
                     <div>
-                        <h2>Live Market Snapshot — India</h2>
-                        <p>Real-time job opportunities powered by Adzuna API</p>
+                        <h2 id="liveMarketTitle">Live Market Snapshot</h2>
+                        <p id="liveMarketSubtitle">Live job opportunities powered by Adzuna API.</p>
                     </div>
                 </div>
                 <div class="empty-state" id="liveJobsEmpty">
                     <i class="fas fa-bolt"></i>
-                    <h6>Live Jobs Not Loaded</h6>
-                    <p>Complete your profile to see market jobs matching your skills.</p>
-                    <button class="btn btn-outline-primary btn-sm empty-state-action" id="liveJobsCtaBtn">Generate Matches</button>
+                    <h6>Live Jobs Unavailable</h6>
+                    <p>Live job data unavailable. Please refresh or try again later.</p>
+                    <button class="btn btn-outline-primary btn-sm empty-state-action" id="liveJobsCtaBtn">Retry Live Jobs</button>
                 </div>
                 <div id="liveJobsList" class="recommendations-grid d-none"></div>
             </section>

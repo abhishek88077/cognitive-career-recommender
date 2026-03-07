@@ -470,32 +470,73 @@ def _build_structured_profile(resume_data):
         elif isinstance(raw_skills, list):
             skills.extend(raw_skills)
 
-    # Filter out noise - keep only technical skills
-    VALID_TECH_SKILLS = {
-        'python', 'java', 'javascript', 'typescript', 'c++', 'c#', 'ruby', 'php', 'go', 'rust', 'kotlin', 'swift',
-        'html', 'css', 'react', 'angular', 'vue', 'node', 'express', 'django', 'flask', 'spring', 'laravel',
-        'sql', 'mysql', 'postgresql', 'mongodb', 'redis', 'oracle', 'sqlite',
-        'aws', 'azure', 'gcp', 'docker', 'kubernetes', 'jenkins', 'git', 'gitlab', 'github',
-        'linux', 'unix', 'bash', 'shell', 'powershell',
-        'rest', 'api', 'graphql', 'soap', 'microservices',
-        'machine learning', 'ml', 'ai', 'deep learning', 'tensorflow', 'pytorch', 'keras', 'scikit-learn', 'sklearn',
-        'pandas', 'numpy', 'matplotlib', 'seaborn',
-        'data analysis', 'data science', 'statistics', 'excel', 'tableau', 'powerbi',
-        'testing', 'junit', 'pytest', 'selenium', 'cypress', 'jest',
-        'agile', 'scrum', 'jira', 'ci/cd', 'devops'
+    # Filter out obvious noise while preserving real resume terms.
+    blocked_tokens = {
+        'skills',
+        'technical skills',
+        'soft skills',
+        'summary',
+        'profile',
+        'experience',
+        'education',
+        'certifications',
+        'projects',
+        'responsibilities',
+        'curriculum vitae',
+        'resume',
     }
-    
-    filtered_skills = []
+
+    cleaned_skills = []
     for skill in skills:
         skill_clean = str(skill).strip().lower()
-        # Remove parentheticals and punctuation
+        if not skill_clean:
+            continue
+
         skill_clean = skill_clean.replace('(', '').replace(')', '').replace('-', ' ')
-        # Check if it's a known technical skill or contains one
-        if skill_clean in VALID_TECH_SKILLS or any(tech in skill_clean for tech in VALID_TECH_SKILLS):
-            filtered_skills.append(skill_clean)
-    
-    # Clean and deduplicate skills
-    skills = list(set(filtered_skills))
+        skill_clean = ' '.join(skill_clean.split())
+
+        # Reject noise-like entries and keep realistic short skill phrases.
+        if skill_clean in blocked_tokens:
+            continue
+        if len(skill_clean) < 2 or len(skill_clean) > 50:
+            continue
+        if any(ch in skill_clean for ch in ['\n', '\r', '\t', ':', ';']):
+            continue
+
+        cleaned_skills.append(skill_clean)
+
+    # Deduplicate while preserving order.
+    skills = list(dict.fromkeys(cleaned_skills))
+
+    # Fallback: extract known skills from raw resume text when parser skill arrays are sparse.
+    if len(skills) < 2:
+        known_skills = {
+            'python', 'sql', 'data analysis', 'machine learning', 'tensorflow', 'pytorch',
+            'pandas', 'numpy', 'statistics', 'excel', 'tableau', 'powerbi', 'aws', 'azure',
+            'gcp', 'docker', 'kubernetes', 'linux', 'django', 'flask', 'fastapi', 'javascript',
+            'typescript', 'react', 'node', 'html', 'css', 'api', 'microservices', 'ci/cd',
+            'git', 'java', 'c++', 'c#', 'go', 'rust', 'angular', 'vue'
+        }
+
+        text_candidates = []
+        for key in ['resume_text', 'text', 'summary', 'objective']:
+            if resume_data.get(key):
+                text_candidates.append(str(resume_data.get(key)))
+            if isinstance(raw, dict) and raw.get(key):
+                text_candidates.append(str(raw.get(key)))
+
+        # Include serialized payload as last resort for simple keyword scan.
+        text_blob = ' '.join(text_candidates) + ' ' + json.dumps(resume_data)
+        text_blob = text_blob.lower()
+
+        extracted_from_text = []
+        for skill in sorted(known_skills, key=len, reverse=True):
+            pattern = r'\b' + re.escape(skill) + r'\b'
+            if re.search(pattern, text_blob):
+                extracted_from_text.append(skill)
+
+        if extracted_from_text:
+            skills = list(dict.fromkeys(skills + extracted_from_text))
     
     logger.debug(f"Extracted {len(skills)} skills after filtering: {skills[:15]}")
 
@@ -1088,7 +1129,12 @@ def analyze_profile():
     return jsonify({
         'recommendations': match_results['recommendations'],
         'normalized_profile': match_results['normalized_profile'],
-        'market_skills': match_results.get('market_skills', {})
+        'skill_gap': match_results.get('skill_gap', []),
+        'roadmap': match_results.get('roadmap', []),
+        'market_skills': match_results.get('market_skills', {}),
+        'live_jobs': match_results.get('live_jobs', []),
+        'data_source': match_results.get('data_source', ''),
+        'data_message': match_results.get('data_message', '')
     })
 
 @app.route('/feedback', methods=['POST'])

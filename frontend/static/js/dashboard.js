@@ -49,6 +49,11 @@ const DashboardModule = {
         this.setupScrollAnimations();
         this.loadUserData();
         this.loadFeedbackHistory();
+        // Keep live jobs empty until user has a meaningful profile context.
+        this.resetLiveJobsPanel({
+            title: 'Live Jobs Not Loaded',
+            subtitle: 'Complete your profile and run matching to load relevant live jobs.'
+        });
     }
 };
 
@@ -184,7 +189,17 @@ DashboardModule.setupQuickActionEvents = function() {
 
     // Live jobs empty-state CTA
     document.getElementById('liveJobsCtaBtn')?.addEventListener('click', () => {
-        this.getPersonalizedRecommendations();
+        const formProfile = this.buildProfileFromCurrentForm();
+        const effectiveProfile = this.mergeProfiles(this.state.lastProfile || {}, formProfile);
+        const effectiveSkills = effectiveProfile.skills || [];
+
+        if (!effectiveSkills.length) {
+            this.showAlert('warning', 'Add skills first, then run Generate Career Matches.');
+            this.scrollToSection('manual-profile');
+            return;
+        }
+
+        this.loadLiveJobs(this.state.allRecommendations || [], effectiveProfile, effectiveSkills);
     });
     
     // Re-run Analysis button
@@ -296,7 +311,7 @@ DashboardModule.handleFileUpload = function(file) {
             }
         })
         .catch(error => {
-            this.handleUploadError('Upload failed. Please try again.');
+            this.handleUploadError(error.message || 'Upload failed. Please try again.');
         })
         .finally(() => {
             this.state.isUploading = false;
@@ -336,12 +351,19 @@ DashboardModule.uploadResumeFile = async function(formData) {
                 ...(csrfToken ? { 'X-CSRFToken': csrfToken } : {})
             }
         });
-        
+
+        const contentType = response.headers.get('content-type') || '';
+        const isJson = contentType.includes('application/json');
+        const payload = isJson ? await response.json() : null;
+
         if (!response.ok) {
-            throw new Error(`HTTP error! status: ${response.status}`);
+            const message = payload && (payload.error || payload.message)
+                ? (payload.error || payload.message)
+                : `Upload failed (${response.status}).`;
+            throw new Error(message);
         }
-        
-        return await response.json();
+
+        return payload || {};
     } catch (error) {
         console.error('Upload error:', error);
         throw error;
@@ -408,10 +430,78 @@ DashboardModule.handleUploadSuccess = function(response) {
         return;
     }
 
+    // For upload mode, analyze resume-extracted skills only (avoid stale manual profile reuse).
+    const resumeOnlyProfile = this.mergeProfiles(profilePayload, {});
+    const resumeOnlySkills = resumeOnlyProfile.skills || [];
+
     this.setProfileStatus('Resume parsed');
-    this.state.lastProfile = profilePayload;
-    this.state.lastSkills = profilePayload.skills || [];
-    this.submitProfileForAnalysis(profilePayload, profilePayload.skills || []);
+    // Update form fields only with extracted values; preserve existing manual values when extracted is blank.
+    this.populateManualProfileForm(profilePayload);
+
+    if (!resumeOnlySkills.length) {
+        this.state.lastProfile = null;
+        this.state.lastSkills = [];
+        this.setProfileStatus('Resume parsed. Add skills to run matching.');
+        this.showAlert('warning', 'Resume upload succeeded, but no reliable skills were extracted from this file. Add skills manually or upload a clearer resume format.');
+        return;
+    }
+
+    this.state.lastProfile = resumeOnlyProfile;
+    this.state.lastSkills = resumeOnlySkills;
+    this.showAlert('info', `Using ${resumeOnlySkills.length} resume-extracted skills for matching.`);
+
+    this.submitProfileForAnalysis(resumeOnlyProfile, resumeOnlySkills);
+};
+
+DashboardModule.hasMeaningfulProfile = function(profile) {
+    if (!profile || typeof profile !== 'object') return false;
+    const skills = Array.isArray(profile.skills) ? profile.skills : [];
+    const interests = Array.isArray(profile.interests) ? profile.interests : [];
+    const degrees = profile.education && Array.isArray(profile.education.degrees)
+        ? profile.education.degrees
+        : [];
+    const exp = Array.isArray(profile.experience) ? profile.experience : [];
+    return skills.length > 0 || interests.length > 0 || degrees.length > 0 || exp.length > 0;
+};
+
+DashboardModule.mergeProfiles = function(primary, fallback) {
+    const p = primary && typeof primary === 'object' ? primary : {};
+    const f = fallback && typeof fallback === 'object' ? fallback : {};
+
+    const mergedSkills = Array.from(new Set([...(p.skills || []), ...(f.skills || [])]));
+    const mergedInterests = Array.from(new Set([...(p.interests || []), ...(f.interests || [])]));
+    const pDegrees = p.education && Array.isArray(p.education.degrees) ? p.education.degrees : [];
+    const fDegrees = f.education && Array.isArray(f.education.degrees) ? f.education.degrees : [];
+    const mergedDegrees = Array.from(new Set([...pDegrees, ...fDegrees])).filter(Boolean);
+
+    const pYears = Array.isArray(p.experience) && p.experience.length ? Number(p.experience[0].years || 0) : 0;
+    const fYears = Array.isArray(f.experience) && f.experience.length ? Number(f.experience[0].years || 0) : 0;
+    const mergedYears = Math.max(pYears, fYears, 0);
+
+    return {
+        skills: mergedSkills,
+        interests: mergedInterests,
+        education: { degrees: mergedDegrees },
+        experience: mergedYears > 0 ? [{ years: mergedYears }] : []
+    };
+};
+
+DashboardModule.buildProfileFromCurrentForm = function() {
+    const educationLevel = document.getElementById('educationLevel')?.value.trim() || '';
+    const yearsExperienceRaw = document.getElementById('yearsExperience')?.value;
+    const skillsInput = document.getElementById('skillsInput')?.value || '';
+    const interestArea = document.getElementById('interestArea')?.value || '';
+
+    const skills = this.normalizeSkills(skillsInput);
+    const interests = this.normalizeSkills(interestArea);
+    const yearsExperience = yearsExperienceRaw ? parseFloat(yearsExperienceRaw) : 0;
+
+    return {
+        skills,
+        interests,
+        education: { degrees: educationLevel ? [educationLevel] : [] },
+        experience: yearsExperience ? [{ years: yearsExperience }] : []
+    };
 };
 
 DashboardModule.handleUploadError = function(message) {
@@ -554,42 +644,82 @@ DashboardModule.submitProfileForAnalysis = function(profilePayload, userSkills) 
         },
         body: JSON.stringify(profilePayload)
     })
-        .then(response => response.json())
+        .then(async response => {
+            const contentType = response.headers.get('content-type') || '';
+            const isJson = contentType.includes('application/json');
+            const payload = isJson ? await response.json() : null;
+
+            if (!response.ok) {
+                const message = payload && (payload.error || payload.message)
+                    ? (payload.error || payload.message)
+                    : `Profile analysis failed (${response.status}).`;
+                throw new Error(message);
+            }
+
+            if (!payload) {
+                throw new Error('Unexpected server response while analyzing profile.');
+            }
+
+            return payload;
+        })
         .then(data => {
             // Profile analysis completed
-            
-            // Always render recommendations if available (even 0% matches are useful)
+
+            if (data.data_source && data.data_source !== 'adzuna' && data.data_message) {
+                this.setProfileStatus('Live market data unavailable');
+                this.showAlert('warning', data.data_message);
+            }
+
             if (data.recommendations && data.recommendations.length) {
                 this.renderRecommendations(data.recommendations, userSkills);
                 this.setProfileStatus('Recommendations ready');
             } else {
-                this.showAlert('warning', 'No recommendations returned. Try adding skills.');
+                if (!data.data_message) {
+                    this.showAlert('warning', 'No skill-based career matches found yet. Add or refine skills and try again.');
+                }
                 this.showEmptyRecommendations();
-            }
-
-            // Always display real market skills from Adzuna API - highest priority
-            if (data.market_skills && Object.keys(data.market_skills).length > 0) {
-                this.updateSkillGapSummaryWithMarketData(data.market_skills);
-                this.updateRoadmapWithMarketData(data.market_skills, userSkills);
-            } else {
-                console.warn('✗ No market skills in response');
                 this.updateSkillGapSummary([]);
                 this.updateRoadmap([]);
+                this.loadLiveJobs([], profilePayload, userSkills);
+                return;
             }
 
-            // Load live jobs based on profile
-            this.loadLiveJobs(profilePayload, userSkills);
+            const roleGap = Array.isArray(data.skill_gap) ? data.skill_gap : [];
+            const roleRoadmap = Array.isArray(data.roadmap) ? data.roadmap : [];
+
+            this.updateSkillGapSummary(roleGap);
+            this.updateRoadmap(roleRoadmap);
+
+            // Prefer live jobs returned from the same analysis call for consistency.
+            if (Array.isArray(data.live_jobs) && data.live_jobs.length) {
+                this.renderLiveJobs(data.live_jobs, data.data_source || 'adzuna');
+            } else {
+                // Fallback fetch using matched careers context.
+                this.loadLiveJobs(data.recommendations, profilePayload, userSkills);
+            }
         })
         .catch(error => {
             console.error('Profile analysis error:', error);
-            this.showAlert('error', 'Profile analysis failed. Please try again.');
+            this.showAlert('error', error.message || 'Profile analysis failed. Please try again.');
         })
         .finally(() => {
             this.hideLoadingOverlay();
         });
 };
 
-DashboardModule.buildLiveQuery = function(profilePayload, userSkills) {
+DashboardModule.buildLiveQuery = function(recommendations, profilePayload, userSkills) {
+    const topRoles = Array.isArray(recommendations)
+        ? recommendations
+            .filter(rec => typeof rec.match_score === 'number' && rec.match_score > 0)
+            .slice(0, 3)
+            .map(rec => rec.job_title)
+            .filter(Boolean)
+        : [];
+
+    if (topRoles.length) {
+        return topRoles.join(' OR ');
+    }
+
     const skills = userSkills || [];
     const interests = (profilePayload && profilePayload.interests) || [];
     
@@ -622,68 +752,133 @@ DashboardModule.buildLiveQuery = function(profilePayload, userSkills) {
     if (interests.length) {
         return interests.slice(0, 2).join(' ');
     }
-    
-    return 'software developer';
+
+    return '';
 };
 
-DashboardModule.loadLiveJobs = function(profilePayload, userSkills) {
+DashboardModule.resetLiveJobsPanel = function(options = {}) {
     const list = document.getElementById('liveJobsList');
     const empty = document.getElementById('liveJobsEmpty');
+    const title = document.getElementById('liveMarketTitle');
+    const subtitle = document.getElementById('liveMarketSubtitle');
     if (!list || !empty) return;
 
-    const query = this.buildLiveQuery(profilePayload, userSkills);
+    if (title && options.marketTitle) title.textContent = options.marketTitle;
+    if (subtitle && options.marketSubtitle) subtitle.textContent = options.marketSubtitle;
+
+    const emptyTitle = empty.querySelector('h6');
+    const emptyText = empty.querySelector('p');
+    if (emptyTitle && options.title) emptyTitle.textContent = options.title;
+    if (emptyText && options.subtitle) emptyText.textContent = options.subtitle;
+
+    list.classList.add('d-none');
+    empty.classList.remove('d-none');
+};
+
+DashboardModule.renderLiveJobs = function(jobs, source = 'adzuna') {
+    const list = document.getElementById('liveJobsList');
+    const empty = document.getElementById('liveJobsEmpty');
+    const title = document.getElementById('liveMarketTitle');
+    const subtitle = document.getElementById('liveMarketSubtitle');
+    if (!list || !empty) return;
+
+    const sourceValue = String(source || '').toLowerCase();
+    if (title) {
+        title.textContent = sourceValue === 'adzuna' ? 'Live Market Snapshot — India' : 'Live Market Snapshot';
+    }
+    if (subtitle) {
+        subtitle.textContent = sourceValue === 'adzuna'
+            ? 'Real-time job opportunities powered by Adzuna API.'
+            : 'Live job data unavailable. Please refresh or try again later.';
+    }
+
+    if (!Array.isArray(jobs) || !jobs.length) {
+        this.resetLiveJobsPanel({
+            title: 'Live Jobs Unavailable',
+            subtitle: 'Live job data unavailable. Please refresh or try again later.'
+        });
+        return;
+    }
+
+    const cards = jobs.slice(0, 6).map(job => {
+        const salary = job.salary_min || job.salary_max
+            ? `$${job.salary_min || ''} - $${job.salary_max || ''}`
+            : 'Salary not listed';
+
+        return `
+            <article class="recommendation-card">
+                <div class="d-flex align-items-start justify-content-between">
+                    <div>
+                        <h4>${job.job_title || 'Job Role'}</h4>
+                        <div class="match-score">${job.company || 'Company'}</div>
+                    </div>
+                    <i class="fas fa-briefcase text-primary"></i>
+                </div>
+                <div class="explanation-text">
+                    <div><i class="fas fa-map-marker-alt me-1"></i>${job.location || 'Location'}</div>
+                    <div><i class="fas fa-dollar-sign me-1"></i>${salary}</div>
+                </div>
+                <div class="recommendation-actions">
+                    <a class="btn btn-sm btn-outline-primary" href="${job.redirect_url || '#'}" target="_blank" rel="noopener">
+                        <i class="fas fa-external-link-alt me-1"></i>View job
+                    </a>
+                </div>
+            </article>
+        `;
+    }).join('');
+
+    list.innerHTML = cards;
+    list.classList.remove('d-none');
+    empty.classList.add('d-none');
+    this.updateDataSourceTimestamp();
+};
+
+DashboardModule.loadLiveJobs = function(recommendations, profilePayload, userSkills) {
+    const list = document.getElementById('liveJobsList');
+    const empty = document.getElementById('liveJobsEmpty');
+    const title = document.getElementById('liveMarketTitle');
+    const subtitle = document.getElementById('liveMarketSubtitle');
+    if (!list || !empty) return;
+
+    const query = this.buildLiveQuery(recommendations, profilePayload, userSkills);
+    if (!query) {
+        this.resetLiveJobsPanel({
+            marketTitle: 'Live Market Snapshot',
+            marketSubtitle: 'Live job opportunities powered by Adzuna API.',
+            title: 'Live Jobs Not Loaded',
+            subtitle: 'Complete your profile and run matching to load relevant live jobs.'
+        });
+        return;
+    }
+
     const params = new URLSearchParams({ query: query, location: 'India', results: 6 });
 
     fetch(`${this.config.apiEndpoints.liveJobs}?${params.toString()}`)
         .then(response => response.json())
         .then(data => {
+            const source = (data && data.source) ? String(data.source).toLowerCase() : '';
+            if (title) {
+                title.textContent = source === 'adzuna'
+                    ? 'Live Market Snapshot — India'
+                    : 'Live Market Snapshot';
+            }
+            if (subtitle) {
+                subtitle.textContent = source === 'adzuna'
+                    ? 'Real-time job opportunities powered by Adzuna API'
+                    : 'Live job data unavailable. Please refresh or try again later.';
+            }
+
             const jobs = (data && data.live_jobs && data.live_jobs.length)
                 ? data.live_jobs
                 : (data && data.jobs && data.jobs.length ? data.jobs : []);
 
-            if (!jobs.length) {
-                list.classList.add('d-none');
-                empty.classList.remove('d-none');
-                return;
-            }
-
-            const cards = jobs.map(job => {
-                const salary = job.salary_min || job.salary_max
-                    ? `$${job.salary_min || ''} - $${job.salary_max || ''}`
-                    : 'Salary not listed';
-
-                return `
-                    <article class="recommendation-card">
-                        <div class="d-flex align-items-start justify-content-between">
-                            <div>
-                                <h4>${job.job_title || 'Job Role'}</h4>
-                                <div class="match-score">${job.company || 'Company'}</div>
-                            </div>
-                            <i class="fas fa-briefcase text-primary"></i>
-                        </div>
-                        <div class="explanation-text">
-                            <div><i class="fas fa-map-marker-alt me-1"></i>${job.location || 'Location'}</div>
-                            <div><i class="fas fa-dollar-sign me-1"></i>${salary}</div>
-                        </div>
-                        <div class="recommendation-actions">
-                            <a class="btn btn-sm btn-outline-primary" href="${job.redirect_url || '#'}" target="_blank" rel="noopener">
-                                <i class="fas fa-external-link-alt me-1"></i>View job
-                            </a>
-                        </div>
-                    </article>
-                `;
-            }).join('');
-
-            list.innerHTML = cards;
-            list.classList.remove('d-none');
-            empty.classList.add('d-none');
-            
-            // Update data source timestamp
-            this.updateDataSourceTimestamp();
+            this.renderLiveJobs(jobs, source);
         })
         .catch(() => {
-            list.classList.add('d-none');
-            empty.classList.remove('d-none');
+            this.resetLiveJobsPanel({
+                title: 'Live Jobs Unavailable',
+                subtitle: 'Live job data unavailable. Please refresh or try again later.'
+            });
         });
 };
 
@@ -706,25 +901,25 @@ DashboardModule.renderRecommendations = function(recommendations, userSkills) {
     const skillsLower = userSkills.map(skill => skill.toLowerCase());
     const aggregatedMissing = new Set();
 
-    // Show only suitable matches (40%+) to avoid low-quality suggestions.
-    const MIN_MATCH_SCORE = 40;
+    // Show only roles with a positive real overlap score.
     const suitableRecs = recommendations.filter(rec => {
         const score = typeof rec.match_score === 'number' 
             ? (rec.match_score <= 1 ? rec.match_score * 100 : rec.match_score)
             : 0;
-        return score >= MIN_MATCH_SCORE;
+        return score > 0;
     });
 
-    if (!suitableRecs.length) {
+    const allRecs = suitableRecs.slice(0, 6);
+
+    if (!allRecs.length) {
         list.classList.add('d-none');
         empty.classList.remove('d-none');
 
-        // Keep empty state explicit when model confidence is low.
         const emptyTitle = empty.querySelector('h6');
         const emptyText = empty.querySelector('p');
-        if (emptyTitle) emptyTitle.textContent = 'No Strong Career Matches Yet';
+        if (emptyTitle) emptyTitle.textContent = 'No Skill-Based Matches Yet';
         if (emptyText) {
-            emptyText.textContent = `Your current profile did not reach the ${MIN_MATCH_SCORE}% quality threshold. Add more relevant skills or experience and run analysis again.`;
+            emptyText.textContent = 'No career reached a positive overlap score. Add relevant skills and run analysis again.';
         }
 
         this.state.allRecommendations = [];
@@ -737,8 +932,6 @@ DashboardModule.renderRecommendations = function(recommendations, userSkills) {
 
         return;
     }
-
-    const allRecs = suitableRecs;
 
     const cards = allRecs.map((rec, index) => {
         const required = this.parseRequiredSkills(rec.required_skills);
@@ -828,7 +1021,7 @@ DashboardModule.renderRecommendations = function(recommendations, userSkills) {
         rerunBtn.style.display = 'inline-block';
     }
 
-    // Don't overwrite skill gap and roadmap - they're now from market_skills in submitProfileForAnalysis
+    // Skill gap and roadmap are rendered from role-overlap results in submitProfileForAnalysis.
     this.registerFeedbackHandlers();
 };
 
@@ -857,149 +1050,33 @@ DashboardModule.updateSkillGapSummary = function(missingSkills) {
 
     container.className = 'tag-list';
     container.innerHTML = missingSkills
-        .slice(0, 10)
+        .slice(0, 8)
         .map(skill => `<span class="tag-item missing">${skill}</span>`)
         .join('');
 };
 
-DashboardModule.updateRoadmap = function(missingSkills) {
+DashboardModule.updateRoadmap = function(roadmapItems) {
     const list = document.getElementById('roadmapList');
     if (!list) return;
 
-    if (!missingSkills.length) {
+    if (!roadmapItems.length) {
         list.innerHTML = '<li>Complete a profile to generate a learning roadmap.</li>';
         return;
     }
 
-    list.innerHTML = missingSkills.slice(0, 6)
-        .map(skill => `<li>Learn ${skill} through a focused course and one practical project.</li>`)
-        .join('');
-};
-
-/**
- * Display real market skills from Adzuna API with demand frequency
- */
-DashboardModule.updateSkillGapSummaryWithMarketData = function(marketSkills) {
-    const container = document.getElementById('skillGapList');
-    if (!container) return;
-
-    // Switch from placeholder mode to tag list mode when rendering market skills.
-    container.className = 'tag-list';
-
-    if (!marketSkills || Object.keys(marketSkills).length === 0) {
-        container.innerHTML = '<span class="empty-list">Analyzing market data...</span>';
-        return;
-    }
-
-    // Sort by frequency (demand) - highest demand first
-    const skillsWithFreq = Object.entries(marketSkills)
-        .map(([skill, frequency]) => ({ skill, frequency }))
-        .sort((a, b) => b.frequency - a.frequency)
-        .slice(0, 15);  // Show more skills
-
-    // Create tags with demand indicators
-    const skillsHtml = skillsWithFreq
-        .map(({ skill, frequency }) => {
-            // Adjusted thresholds for realistic sample sizes (15 jobs)
-            // 10+ = 66% of jobs = High demand | 6-9 = 40-60% = Medium | <6 = Emerging  
-            const demandLevel = frequency >= 10 ? 'high' : frequency >= 6 ? 'medium' : 'low';
-            const demandLabel = frequency >= 10 ? 'High' : frequency >= 6 ? 'Medium' : 'Good';
-            const title = `Appears in ${frequency} real job listings from Adzuna API`;
-            
-            return `<span class="tag-item market-skill" title="${title}" data-demand="${demandLevel}">
-                <strong>${skill}</strong>
-                <span style="font-size: 0.8em; margin-left: 6px; opacity: 0.85;">${demandLabel} (${frequency})</span>
-            </span>`;
+    list.innerHTML = roadmapItems.slice(0, 6)
+        .map(item => {
+            const skill = item.skill || item.phase || 'Skill';
+            const actions = Array.isArray(item.actions) ? item.actions.slice(0, 4) : [];
+            const actionsHtml = actions.map(step => `<li>${step}</li>`).join('');
+            return `
+                <li style="margin-bottom: 1rem;">
+                    <strong>${skill}</strong>
+                    <ol style="margin-top: 0.4rem;">${actionsHtml}</ol>
+                </li>
+            `;
         })
         .join('');
-
-    container.innerHTML = `<div class="market-skills-container">
-        <div class="mb-2" style="font-size: 0.9em; color: #059669;">
-            <i class="fas fa-chart-line me-1"></i>Real market demand from Indian job market
-        </div>
-        ${skillsHtml}
-    </div>`;
-};
-
-/**
- * Display real learning roadmap from market demand
- */
-DashboardModule.updateRoadmapWithMarketData = function(marketSkills, userSkills) {
-    const list = document.getElementById('roadmapList');
-    if (!list) return;
-
-    if (!marketSkills || Object.keys(marketSkills).length === 0) {
-        list.innerHTML = '<li><em>Fetching real market data...</em></li>';
-        return;
-    }
-
-    // Get user skills in lowercase for comparison
-    const userSkillsLower = (userSkills || []).map(s => s.toLowerCase());
-
-    // Sort market skills by demand (frequency)
-    const sortedSkills = Object.entries(marketSkills)
-        .map(([skill, frequency]) => ({ skill, frequency }))
-        .sort((a, b) => b.frequency - a.frequency)
-        .slice(0, 8);
-
-    if (sortedSkills.length === 0) {
-        list.innerHTML = '<li>No market skills identified.</li>';
-        return;
-    }
-
-    // Separate into existing and new skills
-    const existingSkills = [];
-    const newSkills = [];
-
-    sortedSkills.forEach(({ skill, frequency }) => {
-        const hasSkill = userSkillsLower.some(us => us.includes(skill.toLowerCase()) || skill.toLowerCase().includes(us));
-        if (hasSkill) {
-            existingSkills.push({ skill, frequency });
-        } else {
-            newSkills.push({ skill, frequency });
-        }
-    });
-
-    // Build HTML
-    let roadmapHtml = '';
-
-    // Section 1: Skills you already have (strengthen these)
-    if (existingSkills.length > 0) {
-        roadmapHtml += `<li style="list-style: none; font-weight: 600; color: #059669; margin-bottom: 0.5rem;">
-            <i class="fas fa-check-circle me-1"></i>Strengthen These (You Have)
-        </li>`;
-        roadmapHtml += existingSkills
-            .map(({ skill, frequency }) => {
-                const jobCount = frequency > 100 ? '100+' : frequency;
-                const demandBadge = frequency >= 10 ? 'High' : frequency >= 6 ? 'Medium' : 'Good';
-                return `<li style="margin-left: 1.5rem; margin-bottom: 0.3rem;">
-                    <strong>${skill}</strong> <span style="font-size: 0.85em; color: #059669;">${demandBadge} demand (${jobCount} jobs)</span>
-                    <br><small style="color: #6b7280;">Advanced projects to deepen expertise</small>
-                </li>`;
-            })
-            .join('');
-    }
-
-    // Section 2: Skills to learn (priority learning path)
-    if (newSkills.length > 0) {
-        if (existingSkills.length > 0) {
-            roadmapHtml += `<li style="list-style: none; font-weight: 600; color: #3b82f6; margin-top: 1rem; margin-bottom: 0.5rem;">
-                <i class="fas fa-graduation-cap me-1"></i>Learn These (Priority Order)
-            </li>`;
-        }
-        roadmapHtml += newSkills
-            .map(({ skill, frequency }, index) => {
-                const jobCount = frequency > 100 ? '100+' : frequency;
-                const demandBadge = frequency >= 10 ? 'High' : frequency >= 6 ? 'Medium' : 'Good';
-                return `<li style="margin-left: 1.5rem; margin-bottom: 0.3rem;">
-                    <strong>${index + 1}. ${skill}</strong> <span style="font-size: 0.85em; color: #3b82f6;">${demandBadge} demand (${jobCount} jobs)</span>
-                    <br><small style="color: #6b7280;">Online courses → Real projects → GitHub → Job applications</small>
-                </li>`;
-            })
-            .join('');
-    }
-
-    list.innerHTML = roadmapHtml;
 };
 
 DashboardModule.registerFeedbackHandlers = function() {
@@ -1195,13 +1272,26 @@ DashboardModule.showEmptyRecommendations = function() {
  * ========================================
  */
 DashboardModule.getPersonalizedRecommendations = function() {
-    if (!this.state.lastProfile) {
+    const formProfile = this.buildProfileFromCurrentForm();
+    const effectiveProfile = this.mergeProfiles(this.state.lastProfile || {}, formProfile);
+
+    if (!this.hasMeaningfulProfile(effectiveProfile)) {
         this.showAlert('warning', 'Choose a resume or manual profile input first.');
         this.scrollToSection('input-modes');
         return;
     }
 
-    this.submitProfileForAnalysis(this.state.lastProfile, this.state.lastSkills);
+    if (!Array.isArray(effectiveProfile.skills) || effectiveProfile.skills.length === 0) {
+        this.setProfileStatus('Skills required for matching');
+        this.showAlert('warning', 'Add at least one skill in Manual Profile or upload a resume with identifiable skills.');
+        this.scrollToSection('manual-profile');
+        this.showEmptyRecommendations();
+        return;
+    }
+
+    this.state.lastProfile = effectiveProfile;
+    this.state.lastSkills = effectiveProfile.skills || [];
+    this.submitProfileForAnalysis(effectiveProfile, this.state.lastSkills);
 };
 
 DashboardModule.loadRecommendations = function(analysis) {
@@ -1408,10 +1498,15 @@ DashboardModule.loadUserData = function() {
             this.state.lastProfile = profile;
             this.state.lastSkills = Array.isArray(profile.skills) ? profile.skills : [];
             this.updateProfileCompletion(profile);
-            this.setProfileStatus('Saved profile loaded');
 
-            if (this.state.lastProfile) {
-                this.submitProfileForAnalysis(this.state.lastProfile, this.state.lastSkills);
+            if (this.state.lastSkills.length > 0) {
+                this.setProfileStatus('Saved profile loaded. Click Generate Career Matches.');
+            } else {
+                this.setProfileStatus('Saved profile is incomplete. Add skills to continue.');
+                this.resetLiveJobsPanel({
+                    title: 'Live Jobs Not Loaded',
+                    subtitle: 'Complete your profile and run matching to load relevant live jobs.'
+                });
             }
         })
         .catch(error => {
@@ -1438,10 +1533,11 @@ DashboardModule.populateManualProfileForm = function(profile) {
     const skillsEl = document.getElementById('skillsInput');
     const interestsEl = document.getElementById('interestArea');
 
-    if (educationEl) educationEl.value = educationLevel;
-    if (yearsEl) yearsEl.value = yearsExperience || '';
-    if (skillsEl) skillsEl.value = skills;
-    if (interestsEl) interestsEl.value = interests;
+    // Preserve existing user-entered values when incoming payload has blanks.
+    if (educationEl && educationLevel) educationEl.value = educationLevel;
+    if (yearsEl && yearsExperience) yearsEl.value = yearsExperience;
+    if (skillsEl && skills) skillsEl.value = skills;
+    if (interestsEl && interests) interestsEl.value = interests;
 };
 
 window.DashboardModule = DashboardModule;

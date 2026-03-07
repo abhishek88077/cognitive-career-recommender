@@ -1,21 +1,80 @@
-"""Skill-based role matcher used by the dashboard analysis endpoint."""
+"""Real-time skill-based career matcher using live job data."""
 
 from __future__ import annotations
 
-import json
-import os
 import re
+from collections import Counter, defaultdict
 from typing import Any, Dict, List, Set
 
 from utils.data_processor import DataProcessor
 
 
-DATA_DIR = os.path.join(os.path.dirname(os.path.abspath(__file__)), "..", "data")
-ROLES_PATH = os.path.join(DATA_DIR, "career_roles.json")
+SKILL_ALIASES = {
+    "rest api": "api",
+    "rest apis": "api",
+    "apis": "api",
+    "ml": "machine learning",
+    "artificial intelligence": "ai",
+    "data analytics": "data analysis",
+    "power bi": "powerbi",
+    "node.js": "node",
+    "js": "javascript",
+    "py": "python",
+    "structured query language": "sql",
+    "ci cd": "ci/cd",
+    "cloud": "cloud platforms",
+}
+
+# Lightweight vocabulary for extracting market-demand skills from job text.
+KNOWN_SKILLS = {
+    "python",
+    "sql",
+    "data analysis",
+    "machine learning",
+    "tensorflow",
+    "pytorch",
+    "pandas",
+    "numpy",
+    "statistics",
+    "excel",
+    "tableau",
+    "powerbi",
+    "aws",
+    "azure",
+    "gcp",
+    "docker",
+    "kubernetes",
+    "linux",
+    "django",
+    "flask",
+    "fastapi",
+    "javascript",
+    "typescript",
+    "react",
+    "node",
+    "html",
+    "css",
+    "api",
+    "microservices",
+    "ci/cd",
+    "git",
+    "java",
+    "c++",
+    "c#",
+    "go",
+    "rust",
+    "angular",
+    "vue",
+}
+
+
+def _canonical_skill(skill: str) -> str:
+    text = re.sub(r"\s+", " ", str(skill or "").strip().lower())
+    text = text.replace("-", " ")
+    return SKILL_ALIASES.get(text, text)
 
 
 def _tokenize_skills(raw_skills: Any) -> List[str]:
-    """Normalize skills from mixed input shapes into clean, lowercase tokens."""
     if not raw_skills:
         return []
 
@@ -28,11 +87,10 @@ def _tokenize_skills(raw_skills: Any) -> List[str]:
 
     normalized = []
     for item in candidates:
-        text = re.sub(r"\s+", " ", str(item).strip().lower())
+        text = _canonical_skill(item)
         if text:
             normalized.append(text)
 
-    # Keep insertion order while removing duplicates.
     return list(dict.fromkeys(normalized))
 
 
@@ -65,61 +123,28 @@ def _normalize_profile(user_data: Dict[str, Any]) -> Dict[str, Any]:
     }
 
 
-def _load_roles() -> List[Dict[str, Any]]:
-    with open(ROLES_PATH, "r", encoding="utf-8") as f:
-        payload = json.load(f)
-    return payload if isinstance(payload, list) else []
+def _extract_job_skills(job: Dict[str, Any]) -> List[str]:
+    blob = " ".join([
+        str(job.get("job_title", "")),
+        str(job.get("description", "")),
+    ]).lower()
+
+    found = []
+    for skill in sorted(KNOWN_SKILLS, key=len, reverse=True):
+        pattern = r"\b" + re.escape(skill) + r"\b"
+        if re.search(pattern, blob):
+            found.append(_canonical_skill(skill))
+
+    return list(dict.fromkeys(found))
 
 
-def build_roadmap(missing: List[str], related: List[str]) -> List[Dict[str, Any]]:
-    """Generate a compact, structured roadmap used by the dashboard."""
-    structured_roadmap = []
-    priority_skills = list(dict.fromkeys((missing or []) + (related or [])))[:4]
-
-    for idx, skill in enumerate(priority_skills, 1):
-        structured_roadmap.append(
-            {
-                "phase": f"Phase {idx}: {skill.title()} Mastery",
-                "actions": [
-                    f"Complete a focused project using {skill}",
-                    f"Practice {skill} through role-specific exercises",
-                    f"Document what you learned in a portfolio artifact",
-                ],
-                "estimated_time": "2-4 weeks",
-            }
-        )
-
-    return structured_roadmap
-
-
-def build_explanation(matched: List[str], missing: List[str]) -> Dict[str, Any]:
-    """Return explainability messages for recommendation cards."""
-    return {
-        "strengths": [f"Strong overlap in {skill}" for skill in matched[:3]],
-        "gaps": [f"Upskill in {skill}" for skill in missing[:3]],
-        "summary": f"Matched {len(matched)} required skills.",
-    }
-
-
-def _experience_bucket(years: float) -> str:
-    if years >= 6:
-        return "senior"
-    if years >= 2:
-        return "mid"
-    return "entry"
-
-
-def _score_role(user_skills: Set[str], required_skills: List[str]) -> Dict[str, Any]:
+def _score_job(user_skills: Set[str], required_skills: List[str]) -> Dict[str, Any]:
     required = _tokenize_skills(required_skills)
     if not required:
-        return {
-            "match_score": 0,
-            "matched_skills": [],
-            "missing_skills": [],
-        }
+        return {"match_score": 0.0, "matched_skills": [], "missing_skills": []}
 
-    matched = [skill for skill in required if skill in user_skills]
-    missing = [skill for skill in required if skill not in user_skills]
+    matched = [s for s in required if s in user_skills]
+    missing = [s for s in required if s not in user_skills]
     score = round((len(matched) / len(required)) * 100, 2)
 
     return {
@@ -129,106 +154,247 @@ def _score_role(user_skills: Set[str], required_skills: List[str]) -> Dict[str, 
     }
 
 
-def _extract_market_skills(user_skills: List[str]) -> Dict[str, int]:
-    """Return top market-demand skills from live/local job data."""
-    processor = DataProcessor()
-    query = " ".join(user_skills[:3]).strip() or "software developer"
-    market = processor.get_job_market_data({"query": query, "location": "India", "results": 15})
+def _build_query(skills: List[str], interests: List[str]) -> str:
+    primary = skills[:3]
+    if primary:
+        return " ".join(primary)
+    if interests:
+        return " ".join(interests[:2])
+    return "software"
 
-    if not isinstance(market, dict):
-        return {}
 
-    top_skills = market.get("top_skills")
-    if isinstance(top_skills, dict) and top_skills:
-        return {str(k): int(v) for k, v in top_skills.items() if str(k).strip()}
+def _build_skill_gap(top_jobs: List[Dict[str, Any]], user_skills: Set[str]) -> List[str]:
+    missing_counter: Counter[str] = Counter()
 
-    # When using live API, parse the live job descriptions to infer demand counts.
-    live_jobs = market.get("live_jobs") or market.get("jobs") or []
-    if not isinstance(live_jobs, list):
-        return {}
+    for job in top_jobs:
+        for skill in job.get("missing_skills", []):
+            canonical = _canonical_skill(skill)
+            if canonical and canonical not in user_skills:
+                missing_counter[canonical] += 1
 
-    counts: Dict[str, int] = {}
-    known_skills = {
-        "python",
-        "java",
-        "javascript",
-        "typescript",
-        "react",
-        "node",
-        "sql",
-        "aws",
-        "docker",
-        "kubernetes",
-        "machine learning",
-        "data analysis",
-        "excel",
-        "linux",
-        "flask",
-        "django",
+    return [skill for skill, _ in missing_counter.most_common(8)]
+
+
+def _skill_specific_steps(skill: str) -> List[str]:
+    normalized = _canonical_skill(skill)
+    templates = {
+        "django": [
+            "Learn Django models, views, and REST framework basics",
+            "Build a blog or task-manager API project",
+            "Deploy on Render or AWS with environment variables",
+            "Publish code, docs, and API examples on GitHub",
+        ],
+        "tensorflow": [
+            "Learn TensorFlow tensors, datasets, and training loops",
+            "Build an image classifier end-to-end",
+            "Serve the model through a small inference API",
+            "Deploy and track model performance metrics",
+        ],
+        "docker": [
+            "Learn Docker images, containers, and networking",
+            "Containerize your app and database",
+            "Use Docker Compose for local orchestration",
+            "Deploy containerized app to cloud runtime",
+        ],
+        "aws": [
+            "Learn core AWS services (EC2, S3, RDS)",
+            "Deploy one project with IAM and environment secrets",
+            "Set up monitoring and budget alerts",
+            "Document architecture and deployment steps",
+        ],
+        "api": [
+            "Learn REST design and HTTP status codes",
+            "Build CRUD endpoints with validation",
+            "Add authentication and request throttling",
+            "Document APIs using OpenAPI/Postman",
+        ],
     }
 
-    for job in live_jobs:
-        blob = " ".join(
-            [
-                str(job.get("job_title", "")),
-                str(job.get("description", "")),
-            ]
-        ).lower()
-        for skill in known_skills:
-            if skill in blob:
-                counts[skill] = counts.get(skill, 0) + 1
-
-    return dict(sorted(counts.items(), key=lambda item: item[1], reverse=True)[:15])
+    return templates.get(
+        normalized,
+        [
+            f"Learn {skill} fundamentals",
+            f"Build one practical project using {skill}",
+            f"Deploy the project with tests",
+            f"Publish implementation and notes on GitHub",
+        ],
+    )
 
 
-def match_roles(user_data: Dict[str, Any]) -> Dict[str, Any]:
-    """Match user profile to available roles and return explainable recommendations."""
-    profile = _normalize_profile(user_data or {})
-    roles = _load_roles()
-
-    experience_bucket = _experience_bucket(profile["experience_years"])
-    recommendations: List[Dict[str, Any]] = []
-
-    for role in roles:
-        required = role.get("required_skills", [])
-        scored = _score_role(profile["skills_set"], required)
-
-        # Soft boost if role level aligns with user experience.
-        role_level = str(role.get("experience_level", "entry")).lower()
-        level_bonus = 5 if role_level == experience_bucket else 0
-        adjusted_score = min(100, round(scored["match_score"] + level_bonus, 2))
-
-        explanation = build_explanation(scored["matched_skills"], scored["missing_skills"])
-        recommendations.append(
+def build_roadmap(missing_skills: List[str]) -> List[Dict[str, Any]]:
+    roadmap = []
+    for idx, skill in enumerate(missing_skills[:6], 1):
+        roadmap.append(
             {
-                "job_title": role.get("role", "Career Role"),
+                "skill": skill,
+                "phase": f"Step {idx}: {skill.title()}",
+                "actions": _skill_specific_steps(skill),
+                "estimated_time": "2-4 weeks",
+            }
+        )
+    return roadmap
+
+
+def _aggregate_careers(matched_jobs: List[Dict[str, Any]], interests: List[str]) -> List[Dict[str, Any]]:
+    by_title: Dict[str, Dict[str, Any]] = defaultdict(lambda: {
+        "required_counter": Counter(),
+        "matched_counter": Counter(),
+        "samples": 0,
+    })
+
+    for job in matched_jobs:
+        title = str(job.get("job_title", "")).strip() or "Career Role"
+        bucket = by_title[title]
+        bucket["samples"] += 1
+
+        for s in job.get("required_skills", []):
+            bucket["required_counter"][_canonical_skill(s)] += 1
+        for s in job.get("matched_skills", []):
+            bucket["matched_counter"][_canonical_skill(s)] += 1
+
+    careers = []
+    for title, bucket in by_title.items():
+        required = [s for s, _ in bucket["required_counter"].most_common(8)]
+        matched = [s for s, _ in bucket["matched_counter"].most_common(8)]
+        missing = [s for s in required if s not in matched]
+
+        if not required:
+            continue
+
+        score = round((len(matched) / len(required)) * 100, 2)
+        interest_hits = sum(1 for i in interests if _canonical_skill(i) in title.lower())
+
+        careers.append(
+            {
+                "job_title": title,
                 "required_skills": required,
-                "experience_level": role_level,
-                "match_score": adjusted_score,
-                "matched_skills": scored["matched_skills"],
-                "missing_skills": scored["missing_skills"],
-                "related_skills_to_learn": role.get("related_skills_to_learn", []),
+                "matched_skills": matched,
+                "missing_skills": missing,
+                "match_score": score,
+                "experience_level": "entry",
+                "demand_count": bucket["samples"],
+                "interest_hits": interest_hits,
                 "explanation": [
-                    explanation["summary"],
-                    *explanation["strengths"],
-                    *explanation["gaps"],
+                    f"Matched {len(matched)} of {len(required)} core skills from live jobs.",
+                    f"Based on {bucket['samples']} current job postings.",
                 ],
-                "roadmap": build_roadmap(
-                    scored["missing_skills"], role.get("related_skills_to_learn", [])
-                ),
             }
         )
 
-    recommendations.sort(key=lambda item: item["match_score"], reverse=True)
+    careers.sort(
+        key=lambda c: (c["match_score"], c["interest_hits"], c["demand_count"]),
+        reverse=True,
+    )
+    return careers[:10]
+
+
+def _extract_market_skills(live_jobs: List[Dict[str, Any]]) -> Dict[str, int]:
+    counter: Counter[str] = Counter()
+    for job in live_jobs:
+        for skill in _extract_job_skills(job):
+            counter[skill] += 1
+    return dict(counter.most_common(12))
+
+
+def match_roles(user_data: Dict[str, Any]) -> Dict[str, Any]:
+    """Real-time matching pipeline based on live jobs and skill overlap."""
+    profile = _normalize_profile(user_data or {})
+
+    if not profile["skills"]:
+        return {
+            "recommendations": [],
+            "normalized_profile": {
+                "skills": profile["skills"],
+                "interests": profile["interests"],
+                "experience_years": profile["experience_years"],
+                "experience_level": "entry",
+                "education": profile["education"],
+            },
+            "skill_gap": [],
+            "roadmap": [],
+            "market_skills": {},
+            "live_jobs": [],
+            "data_source": "none",
+            "data_message": "Add skills to start matching.",
+        }
+
+    processor = DataProcessor()
+    query = _build_query(profile["skills"], profile["interests"])
+    market = processor.get_job_market_data({"query": query, "location": "India", "results": 30})
+
+    live_jobs = market.get("live_jobs", []) if isinstance(market, dict) else []
+    source = market.get("source", "unavailable") if isinstance(market, dict) else "unavailable"
+
+    if source != "adzuna" or not live_jobs:
+        return {
+            "recommendations": [],
+            "normalized_profile": {
+                "skills": profile["skills"],
+                "interests": profile["interests"],
+                "experience_years": profile["experience_years"],
+                "experience_level": "entry",
+                "education": profile["education"],
+            },
+            "skill_gap": [],
+            "roadmap": [],
+            "market_skills": {},
+            "live_jobs": [],
+            "data_source": "unavailable",
+            "data_message": "Live job data unavailable. Please refresh or try again later.",
+        }
+
+    scored_jobs: List[Dict[str, Any]] = []
+    for job in live_jobs:
+        required = _extract_job_skills(job)
+        # Skip low-signal jobs with too few detectable skills.
+        if len(required) < 3:
+            continue
+
+        scored = _score_job(profile["skills_set"], required)
+        overlap_count = len(scored["matched_skills"])
+        score = float(scored["match_score"])
+
+        # Only keep meaningful overlaps and practical thresholds.
+        if overlap_count < 2 or score < 25:
+            continue
+
+        scored_jobs.append(
+            {
+                "job_title": job.get("job_title", "Job Role"),
+                "company": job.get("company", ""),
+                "location": job.get("location", ""),
+                "salary_min": job.get("salary_min"),
+                "salary_max": job.get("salary_max"),
+                "redirect_url": job.get("redirect_url", ""),
+                "description": job.get("description", ""),
+                "required_skills": required,
+                "matched_skills": scored["matched_skills"],
+                "missing_skills": scored["missing_skills"],
+                "match_score": score,
+            }
+        )
+
+    scored_jobs.sort(key=lambda j: j["match_score"], reverse=True)
+    top_jobs = scored_jobs[:10]
+
+    careers = _aggregate_careers(top_jobs, profile["interests"])
+    skill_gap = _build_skill_gap(top_jobs, profile["skills_set"])
+    roadmap = build_roadmap(skill_gap)
+    market_skills = _extract_market_skills(live_jobs)
 
     return {
-        "recommendations": recommendations[:10],
+        "recommendations": careers,
         "normalized_profile": {
             "skills": profile["skills"],
             "interests": profile["interests"],
             "experience_years": profile["experience_years"],
-            "experience_level": experience_bucket,
+            "experience_level": "entry",
             "education": profile["education"],
         },
-        "market_skills": _extract_market_skills(profile["skills"]),
+        "skill_gap": skill_gap,
+        "roadmap": roadmap,
+        "market_skills": market_skills,
+        "live_jobs": top_jobs,
+        "data_source": "adzuna",
+        "data_message": "",
     }
