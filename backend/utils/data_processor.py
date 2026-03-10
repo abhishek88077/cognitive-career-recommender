@@ -11,6 +11,11 @@ from typing import Dict, List, Any, Tuple, Optional
 import sqlite3
 from datetime import datetime, timedelta
 import os
+from dotenv import load_dotenv
+
+
+BACKEND_DIR = os.path.abspath(os.path.join(os.path.dirname(__file__), '..'))
+load_dotenv(os.path.join(BACKEND_DIR, '.env'))
 
 class DataProcessor:
     """
@@ -262,63 +267,21 @@ class DataProcessor:
         """
         filters = filters or {}
 
-        # Try live data first if API credentials are available
+        # Use live data only for market snapshot to avoid synthetic listings.
         live_jobs = self._fetch_adzuna_jobs(filters)
-        if live_jobs is not None:
+        if live_jobs:
             return {
                 'source': 'adzuna',
                 'total_jobs': len(live_jobs),
                 'live_jobs': live_jobs
             }
 
-        filtered_data = self.job_data.copy()
-        
-        # Apply filters if provided
-        if filters:
-            if 'location' in filters and filters.get('location'):
-                filtered_data = filtered_data[filtered_data['location'].str.contains(filters['location'], case=False, na=False)]
-            
-            if 'experience_level' in filters and filters.get('experience_level'):
-                filtered_data = filtered_data[filtered_data['experience_level'] == filters['experience_level']]
-            
-            if 'industry' in filters and filters.get('industry'):
-                filtered_data = filtered_data[filtered_data['industry'] == filters['industry']]
-            
-            if 'employment_type' in filters and filters.get('employment_type'):
-                filtered_data = filtered_data[filtered_data['employment_type'] == filters['employment_type']]
-        
-        # Generate market insights
-        jobs_preview = []
-        if not filtered_data.empty:
-            preview_rows = filtered_data.head(6)
-            for _, row in preview_rows.iterrows():
-                jobs_preview.append({
-                    'job_title': row.get('job_title', ''),
-                    'company': row.get('company', ''),
-                    'location': row.get('location', ''),
-                    'salary_min': int(row.get('salary_min')) if pd.notna(row.get('salary_min')) else None,
-                    'salary_max': int(row.get('salary_max')) if pd.notna(row.get('salary_max')) else None,
-                    'employment_type': row.get('employment_type', ''),
-                    'description': row.get('description', ''),
-                    'created': row.get('posted_date', ''),
-                    'redirect_url': ''
-                })
-
-        market_data = {
-            'source': 'local',
-            'total_jobs': len(filtered_data),
-            'top_companies': filtered_data['company'].value_counts().head(10).to_dict(),
-            'top_locations': filtered_data['location'].value_counts().head(10).to_dict(),
-            'experience_distribution': filtered_data['experience_level'].value_counts().to_dict(),
-            'industry_distribution': filtered_data['industry'].value_counts().to_dict(),
-            'average_salary_by_title': self._calculate_average_salaries(filtered_data),
-            'top_skills': self._extract_top_skills(filtered_data),
-            'jobs_by_date': self._get_job_trends(filtered_data),
-            'employment_types': filtered_data['employment_type'].value_counts().to_dict(),
-            'jobs': jobs_preview
+        return {
+            'source': 'unavailable',
+            'total_jobs': 0,
+            'live_jobs': [],
+            'error': 'Live job data unavailable. Please refresh or try again later.'
         }
-        
-        return market_data
 
     def _fetch_adzuna_jobs(self, filters: Dict[str, Any]) -> Optional[List[Dict[str, Any]]]:
         import logging
@@ -561,7 +524,7 @@ class DataProcessor:
         """Get job posting trends by date"""
         job_data['posted_date'] = pd.to_datetime(job_data['posted_date'])
         weekly_counts = job_data.groupby(job_data['posted_date'].dt.isocalendar().week).size()
-        return weekly_counts.to_dict()
+        return {str(int(week)): int(count) for week, count in weekly_counts.items()}
     
     def _get_related_skills(self, skill_name: str) -> List[str]:
         """Get related skills for a given skill"""
