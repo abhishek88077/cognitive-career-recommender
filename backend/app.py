@@ -1279,7 +1279,8 @@ def upload_resume():
         
         # Prevent double extensions like .pdf.exe
         if len(file_ext) > 4 or file_ext not in allowed_extensions:
-            return jsonify({'error': f'Invalid file type. Allowed types: {', '.join(sorted(allowed_extensions))}'}), 400
+            allowed_list = ', '.join(sorted(allowed_extensions))
+            return jsonify({'error': f'Invalid file type. Allowed types: {allowed_list}'}), 400
 
         allowed_mime_types = {
             'application/pdf',
