@@ -61,14 +61,20 @@ const DashboardModule = {
         this.showOnboardingTooltip();
         this.setupThemeToggleIcon();
         this.loadAISuggestions();
-        this.loadProfileAnalytics();
         this.loadSkillGapAnalytics();
         this.loadExplainableOutput();
         this.loadSkillDemandAnalytics();
         this.loadAIInsightBox();
         this.setupLiveJobsFallback();
-                                // Always show spinner and fallback for Live Jobs
-                                setupLiveJobsFallback: function() {
+        this.loadFeedbackHistory();
+        this.resetLiveJobsPanel({
+            title: 'Live Jobs Not Loaded',
+            subtitle: 'Complete your profile and run matching to load relevant live jobs.'
+        });
+    },
+
+    // Always show spinner and fallback for Live Jobs
+    setupLiveJobsFallback: function() {
                                     const liveJobsContent = document.getElementById('live-jobs-content');
                                     const spinner = document.getElementById('live-jobs-spinner');
                                     const message = document.getElementById('live-jobs-message');
@@ -237,36 +243,9 @@ const DashboardModule = {
                             .catch(() => {
                                 panel.innerHTML = '<div class="text-danger">Failed to load profile analytics. Try again later.</div>';
                             });
-                                        <i class="fas fa-user-circle fa-3x text-secondary mb-3"></i>
-                                        <h6 class="mb-2">No Profile Found</h6>
-                                        <p class="mb-3">Upload your resume or build your profile to unlock analytics and personalized insights.</p>
-                                        <button class="btn btn-primary" onclick="document.getElementById('uploadResumeNav').click()">
-                                            <i class="fas fa-file-upload me-2"></i>Upload Resume
-                                        </button>
-                                        <button class="btn btn-outline-secondary ms-2" onclick="document.getElementById('manualProfileNav').click()">
-                                            <i class="fas fa-edit me-2"></i>Build Profile
-                                        </button>
-                                    </div>`;
-                                return;
-                            }
-                            let completion = 0;
-                            if (data.profile.education && data.profile.education.degrees && data.profile.education.degrees.length) completion += 25;
-                            if (data.profile.experience && data.profile.experience.length && data.profile.experience[0].years > 0) completion += 25;
-                            if (data.profile.skills && data.profile.skills.length) completion += 35;
-                            if (data.profile.interests && data.profile.interests.length) completion += 15;
-                            completion = Math.min(100, completion);
-                            panel.innerHTML = `<div class="mb-2">Profile Completion: <strong>${completion}%</strong></div>
-                                <div class="progress" style="height: 8px;">
-                                    <div class="progress-bar bg-success" role="progressbar" style="width: ${completion}%" aria-valuenow="${completion}" aria-valuemin="0" aria-valuemax="100"></div>
-                                </div>
-                                <small class="text-muted">Education, experience, skills, and interests contribute to completion.</small>`;
-                        })
-                        .catch(() => {
-                            panel.innerHTML = '<div class="text-danger">Failed to load profile analytics. Try again later.</div>';
-                        });
-                    },
+                        },
 
-                    // Load Skill Gap Analytics
+                        // Load Skill Gap Analytics
                     loadSkillGapAnalytics: function() {
                         const panel = document.getElementById('skill-gap-analytics-content');
                         if (!panel) return;
@@ -414,14 +393,7 @@ const DashboardModule = {
                         themeIcon.classList.toggle('fa-sun', isDark);
                     });
                 }
-            },
-        this.loadFeedbackHistory();
-        // Keep live jobs empty until user has a meaningful profile context.
-        this.resetLiveJobsPanel({
-            title: 'Live Jobs Not Loaded',
-            subtitle: 'Complete your profile and run matching to load relevant live jobs.'
-        });
-    }
+            }
 };
 
 DashboardModule.getCsrfToken = function() {
@@ -861,10 +833,14 @@ DashboardModule.setupFilterEvents = function() {
 
 DashboardModule.applyFilters = function() {
     // Get filter values
+    const rawExperience = (document.getElementById('filterExperience')?.value || '').toString().trim().toLowerCase();
+    const rawWorkType = (document.getElementById('filterWorkType')?.value || '').toString().trim().toLowerCase();
+    const rawIndustry = (document.getElementById('filterIndustry')?.value || '').toString().trim().toLowerCase();
+
     this.state.currentFilters = {
-        experience: document.getElementById('filterExperience')?.value || '',
-        workType: document.getElementById('filterWorkType')?.value || '',
-        industry: document.getElementById('filterIndustry')?.value || '',
+        experience: rawExperience === 'all' ? '' : rawExperience,
+        workType: rawWorkType === 'all' ? '' : rawWorkType,
+        industry: rawIndustry === 'all' ? '' : rawIndustry,
         matchScore: parseInt(document.getElementById('filterMatchScore')?.value || 0),
         location: document.getElementById('filterLocation')?.value?.toLowerCase() || '',
         salaryMin: parseInt(document.getElementById('filterSalary')?.value || 0)
@@ -1868,16 +1844,21 @@ DashboardModule.renderRecommendations = function(recommendations, userSkills, op
 
     if (!list || !empty) return;
 
+    const allSourceRecs = Array.isArray(recommendations) ? recommendations.slice() : [];
+    if (!isFilteredView) {
+        // Store all source recommendations for filter re-application
+        this.state.allRecommendationsRaw = allSourceRecs.slice();
+    }
+
     const skillsLower = userSkills.map(skill => skill.toLowerCase());
     const aggregatedMissing = new Set();
 
     let allRecs = [];
 
     if (isFilteredView) {
-        allRecs = Array.isArray(recommendations) ? recommendations.slice(0, 6) : [];
+        allRecs = allSourceRecs.slice(0, 6);
     } else {
-        // Show only roles with a positive real overlap score.
-        const suitableRecs = recommendations.filter(rec => {
+        const suitableRecs = allSourceRecs.filter(rec => {
             const score = typeof rec.match_score === 'number'
                 ? (rec.match_score <= 1 ? rec.match_score * 100 : rec.match_score)
                 : 0;
@@ -1888,7 +1869,7 @@ DashboardModule.renderRecommendations = function(recommendations, userSkills, op
         allRecs = suitableRecs.slice(0, 6);
 
         if (!allRecs.length) {
-            const lowConfidence = recommendations.filter(rec => {
+            const lowConfidence = allSourceRecs.filter(rec => {
                 const score = typeof rec.match_score === 'number'
                     ? (rec.match_score <= 1 ? rec.match_score * 100 : rec.match_score)
                     : 0;
@@ -1916,10 +1897,7 @@ DashboardModule.renderRecommendations = function(recommendations, userSkills, op
                 : 'No career reached a positive overlap score. Add relevant skills and run analysis again.';
         }
 
-        if (shouldPersist) {
-            this.state.allRecommendations = [];
-            this.state.allRecommendationsRaw = [];
-        }
+        this.state.allRecommendations = [];
 
         const filterPanel = document.getElementById('filterPanel');
         if (filterPanel && !isFilteredView) filterPanel.classList.add('d-none');
@@ -2017,9 +1995,9 @@ DashboardModule.renderRecommendations = function(recommendations, userSkills, op
     list.classList.remove('d-none');
     empty.classList.add('d-none');
     
-    // Store full source for future filter operations.
+    // Store full source for future filter operations (including filters and "all" view behavior).
     if (shouldPersist) {
-        this.state.allRecommendationsRaw = allRecs.slice();
+        this.state.allRecommendationsRaw = allSourceRecs.slice();
     }
     this.state.allRecommendations = allRecs;
     
